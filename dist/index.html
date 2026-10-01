@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#073b4c" />
+    <meta
+      name="description"
+      content="2026 国庆威海自驾行程时间表，支持进度勾选与手机地图导航。"
+    />
+    <title>威海海岸行程簿</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23073b4c'/%3E%3Cpath d='M8 42c8-8 16-8 24 0s16 8 24 0v10H8z' fill='%235bc0be'/%3E%3Cpath d='M31 11h5l3 25H28z' fill='%23fff'/%3E%3Cpath d='M27 20h13l-2-7h-9z' fill='%23ff8c61'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero-photo" role="img" aria-label="威海悦海公园海岸与灯塔"></div>
+      <div class="hero-shade"></div>
+      <div class="hero-content shell">
+        <p class="eyebrow">2026 · 国庆 · 两人自驾</p>
+        <h1>威海海岸行程簿</h1>
+        <p class="trip-meta">10 月 3 日 15:00 — 10 月 5 日 11:00</p>
+      </div>
+    </header>
+
+    <main class="shell app-shell">
+      <section class="progress-card" aria-labelledby="progress-title">
+        <div class="progress-copy">
+          <p class="section-kicker" id="progress-title">旅行进度</p>
+          <p class="progress-number"><span id="completed-count">0</span>/<span id="total-count">0</span></p>
+          <p class="progress-status" id="progress-status">正在读取行程…</p>
+        </div>
+        <div class="progress-visual" aria-hidden="true">
+          <svg viewBox="0 0 120 120">
+            <circle class="progress-track" cx="60" cy="60" r="50"></circle>
+            <circle class="progress-ring" cx="60" cy="60" r="50"></circle>
+          </svg>
+          <strong id="progress-percent">0%</strong>
+        </div>
+      </section>
+
+      <section class="notice" aria-label="行程提醒">
+        <span class="notice-icon">≈</span>
+        <div>
+          <strong>10 月 4 日有风雨</strong>
+          <span>环海路辅线禁车，按计划停车换乘；湿滑时缩短徒步。</span>
+        </div>
+      </section>
+
+      <nav class="day-tabs" id="day-tabs" aria-label="选择行程日期"></nav>
+
+      <section class="timeline-panel" aria-live="polite">
+        <div class="day-heading">
+          <div>
+            <p class="section-kicker" id="active-date">行程</p>
+            <h2 id="active-title">读取中</h2>
+          </div>
+          <button class="text-button" id="reset-button" type="button">重置进度</button>
+        </div>
+        <div id="timeline" class="timeline"></div>
+        <div id="error-state" class="error-state" hidden>
+          <strong>暂时无法读取行程文件</strong>
+          <p>请通过网页服务器打开此应用，并确认 Markdown 文件与网页资源位于同一目录。</p>
+          <button type="button" id="retry-button">重新读取</button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="map-dialog" class="map-dialog">
+      <div class="dialog-head">
+        <div>
+          <p class="section-kicker">地图导航</p>
+          <h2 id="map-place">选择地图</h2>
+          <p id="map-address"></p>
+        </div>
+        <button type="button" class="icon-button" id="close-map" aria-label="关闭">×</button>
+      </div>
+      <div class="map-options">
+        <a id="amap-link" class="map-option amap" target="_blank" rel="noreferrer">
+          <span>高</span>
+          <div><strong>高德地图</strong><small>优先唤起手机 App</small></div>
+        </a>
+        <a id="baidu-link" class="map-option baidu" target="_blank" rel="noreferrer">
+          <span>百</span>
+          <div><strong>百度地图</strong><small>网页或 App 中打开</small></div>
+        </a>
+        <a id="apple-link" class="map-option apple" target="_blank" rel="noreferrer">
+          <span></span>
+          <div><strong>Apple 地图</strong><small>适用于 iPhone</small></div>
+        </a>
+      </div>
+    </dialog>
+
+    <footer class="shell footer">
+      <p>行程内容来自《威海国庆自驾计划_2026-10-03至10-05.md》，完成状态仅保存在当前设备。</p>
+      <a href="https://www.trip.com/moments/detail/weihai-169-138954467" target="_blank" rel="noreferrer">背景图片来源</a>
+    </footer>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
