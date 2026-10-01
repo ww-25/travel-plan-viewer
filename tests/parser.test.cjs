@@ -49,4 +49,8 @@ assert.equal(
   "默认威海计划应提供七个路线地点"
 );
 
-console.log("Parser tests passed: upload-compatible Markdown, map coordinates, and generic months.");
+vm.runInContext("globalThis.gcjResult = wgs84ToGcj02(122.12042, 37.51332);", context);
+assert.ok(Math.abs(context.gcjResult.longitude - 122.12568) < 0.001, "应将威海经度转换为高德 GCJ-02 坐标");
+assert.ok(Math.abs(context.gcjResult.latitude - 37.51416) < 0.001, "应将威海纬度转换为高德 GCJ-02 坐标");
+
+console.log("Parser tests passed: Markdown, map coordinates, GCJ-02 projection, and generic months.");

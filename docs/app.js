@@ -2,6 +2,27 @@ const STORAGE_PREFIX = "travel-plan-progress:v2:";
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_PLAN_URL = "./trip.md";
 const MAP_COLORS = { pending: "#f05a28", completed: "#8aa0a3" };
+const MAP_TILE_PROVIDERS = [
+  {
+    id: "amap",
+    url: "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}",
+    options: {
+      subdomains: "1234",
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://ditu.amap.com/" target="_blank" rel="noreferrer">高德地图</a>'
+    },
+    coordinateSystem: "gcj02"
+  },
+  {
+    id: "osm",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>'
+    },
+    coordinateSystem: "wgs84"
+  }
+];
 
 const placeRules = [
   { test: /入住、处理停车/, name: "麗枫酒店（威海幸福门威高广场店）", address: "山东省威海市环翠区昆明路16号" },
@@ -25,7 +46,10 @@ const state = {
   storageKey: "",
   mapFilter: "all",
   routeMap: null,
-  routeLayer: null
+  routeLayer: null,
+  tileLayer: null,
+  tileProviderIndex: 0,
+  tileFallbackActive: false
 };
 
 const els = {
@@ -145,6 +169,35 @@ function parseCoordinates(value) {
   const latitude = Number(match[2]);
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || Math.abs(longitude) > 180 || Math.abs(latitude) > 90) return null;
   return { longitude, latitude };
+}
+
+function outsideChina(longitude, latitude) {
+  return longitude < 72.004 || longitude > 137.8347 || latitude < 0.8293 || latitude > 55.8271;
+}
+
+function coordinateOffset(value) {
+  return Math.sin(value * Math.PI);
+}
+
+function wgs84ToGcj02(longitude, latitude) {
+  if (outsideChina(longitude, latitude)) return { longitude, latitude };
+  const x = longitude - 105;
+  const y = latitude - 35;
+  let latitudeDelta = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  latitudeDelta += (20 * coordinateOffset(6 * x) + 20 * coordinateOffset(2 * x)) * 2 / 3;
+  latitudeDelta += (20 * coordinateOffset(y) + 40 * coordinateOffset(y / 3)) * 2 / 3;
+  latitudeDelta += (160 * coordinateOffset(y / 12) + 320 * coordinateOffset(y / 30)) * 2 / 3;
+  let longitudeDelta = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  longitudeDelta += (20 * coordinateOffset(6 * x) + 20 * coordinateOffset(2 * x)) * 2 / 3;
+  longitudeDelta += (20 * coordinateOffset(x) + 40 * coordinateOffset(x / 3)) * 2 / 3;
+  longitudeDelta += (150 * coordinateOffset(x / 12) + 300 * coordinateOffset(x / 30)) * 2 / 3;
+  const radianLatitude = latitude / 180 * Math.PI;
+  const eccentricity = 0.00669342162296594323;
+  const magic = 1 - eccentricity * Math.sin(radianLatitude) ** 2;
+  const sqrtMagic = Math.sqrt(magic);
+  latitudeDelta = latitudeDelta * 180 / ((6378245 * (1 - eccentricity)) / (magic * sqrtMagic) * Math.PI);
+  longitudeDelta = longitudeDelta * 180 / (6378245 / sqrtMagic * Math.cos(radianLatitude) * Math.PI);
+  return { longitude: longitude + longitudeDelta, latitude: latitude + latitudeDelta };
 }
 
 function parseItinerary(markdown) {
@@ -267,6 +320,40 @@ function populateMapFilter() {
   els.mapDayFilter.value = "all";
 }
 
+function routeLatLng(coordinates) {
+  const provider = MAP_TILE_PROVIDERS[state.tileProviderIndex] || MAP_TILE_PROVIDERS[0];
+  const projected = provider.coordinateSystem === "gcj02"
+    ? wgs84ToGcj02(coordinates.longitude, coordinates.latitude)
+    : coordinates;
+  return [projected.latitude, projected.longitude];
+}
+
+function activateTileProvider(index) {
+  const provider = MAP_TILE_PROVIDERS[index];
+  if (!state.routeMap || !provider) return;
+  if (state.tileLayer) state.routeMap.removeLayer(state.tileLayer);
+  state.tileProviderIndex = index;
+  let loadedTiles = 0;
+  let failedTiles = 0;
+  const tiles = window.L.tileLayer(provider.url, provider.options);
+  tiles.on("tileload", () => { loadedTiles += 1; });
+  tiles.on("tileerror", () => {
+    failedTiles += 1;
+    const nextIndex = index + 1;
+    if (!state.tileFallbackActive && loadedTiles === 0 && failedTiles >= 3 && MAP_TILE_PROVIDERS[nextIndex]) {
+      state.tileFallbackActive = true;
+      activateTileProvider(nextIndex);
+      renderRouteMap();
+      els.mapStatus.textContent = "国内底图连接失败，已自动切换备用底图。";
+      return;
+    }
+    if (failedTiles >= 3 && !MAP_TILE_PROVIDERS[nextIndex]) {
+      els.mapStatus.textContent = "底图图片暂时无法连接；路线、地点和外部地图导航仍可正常使用。";
+    }
+  });
+  state.tileLayer = tiles.addTo(state.routeMap);
+}
+
 function ensureRouteMap() {
   if (state.routeMap) return true;
   if (typeof window.L === "undefined") {
@@ -282,16 +369,7 @@ function ensureRouteMap() {
     scrollWheelZoom: false,
     zoomControl: true
   });
-  const tiles = window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>'
-  });
-  let tileErrors = 0;
-  tiles.on("tileerror", () => {
-    tileErrors += 1;
-    if (tileErrors >= 3) els.mapStatus.textContent = "底图加载不完整；时间轴和外部地图导航不受影响。";
-  });
-  tiles.addTo(state.routeMap);
+  activateTileProvider(0);
   state.routeLayer = window.L.layerGroup().addTo(state.routeMap);
   return true;
 }
@@ -331,7 +409,7 @@ function renderRouteMap() {
       const item = dayPoints[index];
       const completed = Boolean(state.progress[item.id]);
       const status = completed ? "completed" : "pending";
-      const latLng = [item.coordinates.latitude, item.coordinates.longitude];
+      const latLng = routeLatLng(item.coordinates);
       sequence += 1;
       bounds.push(latLng);
 
@@ -355,7 +433,7 @@ function renderRouteMap() {
 
       if (index > 0) {
         const previous = dayPoints[index - 1];
-        const previousLatLng = [previous.coordinates.latitude, previous.coordinates.longitude];
+        const previousLatLng = routeLatLng(previous.coordinates);
         window.L.polyline([previousLatLng, latLng], {
           color: MAP_COLORS[status],
           weight: completed ? 3 : 5,
