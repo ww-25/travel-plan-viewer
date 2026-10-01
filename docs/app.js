@@ -1,6 +1,7 @@
 const STORAGE_PREFIX = "travel-plan-progress:v2:";
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_PLAN_URL = "./trip.md";
+const MAP_COLORS = { pending: "#f05a28", completed: "#8aa0a3" };
 
 const placeRules = [
   { test: /入住、处理停车/, name: "麗枫酒店（威海幸福门威高广场店）", address: "山东省威海市环翠区昆明路16号" },
@@ -21,7 +22,10 @@ const state = {
   days: [],
   activeDay: 0,
   progress: {},
-  storageKey: ""
+  storageKey: "",
+  mapFilter: "all",
+  routeMap: null,
+  routeLayer: null
 };
 
 const els = {
@@ -34,6 +38,11 @@ const els = {
   changeFile: document.querySelector("#change-file"),
   replaceFile: document.querySelector("#replace-file"),
   progressCard: document.querySelector("#progress-card"),
+  routeMapPanel: document.querySelector("#route-map-panel"),
+  routeMap: document.querySelector("#route-map"),
+  mapDayFilter: document.querySelector("#map-day-filter"),
+  mapEmpty: document.querySelector("#map-empty"),
+  mapStatus: document.querySelector("#map-status"),
   timelinePanel: document.querySelector("#timeline-panel"),
   tabs: document.querySelector("#day-tabs"),
   timeline: document.querySelector("#timeline"),
@@ -98,7 +107,7 @@ function detailsToHtml(lines) {
 
   for (const raw of lines) {
     const line = raw.trim();
-    if (/^[-*]\s*(类型|地点|地址|导航关键词)：/.test(line)) continue;
+    if (/^[-*]\s*(类型|地点|地址|导航关键词|坐标)：/.test(line)) continue;
     if (!line || line.startsWith("**步行路线：**") || line.startsWith("**滨海自驾路线：**") || line.startsWith("**建议动线：**")) {
       if (line) {
         flushList();
@@ -122,10 +131,20 @@ function detailsToHtml(lines) {
 function itemMetadata(lines) {
   const metadata = {};
   for (const raw of lines) {
-    const match = raw.trim().match(/^[-*]\s*(类型|地点|地址|导航关键词|停车)：\s*(.+)$/);
+    const match = raw.trim().match(/^[-*]\s*(类型|地点|地址|导航关键词|坐标|停车)：\s*(.+)$/);
     if (match) metadata[match[1]] = match[2].trim();
   }
   return metadata;
+}
+
+function parseCoordinates(value) {
+  if (!value) return null;
+  const match = value.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (!match) return null;
+  const longitude = Number(match[1]);
+  const latitude = Number(match[2]);
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || Math.abs(longitude) > 180 || Math.abs(latitude) > 90) return null;
+  return { longitude, latitude };
 }
 
 function parseItinerary(markdown) {
@@ -142,6 +161,7 @@ function parseItinerary(markdown) {
     item.place = metadata["地点"] && metadata["地址"] && metadata["导航关键词"]
       ? { name: metadata["导航关键词"], address: metadata["地址"], label: metadata["地点"] }
       : placeRules.find((rule) => rule.test.test(item.title)) || null;
+    item.coordinates = parseCoordinates(metadata["坐标"]);
     day.items.push(item);
     item = null;
   };
@@ -238,6 +258,121 @@ function renderTimeline() {
   });
 }
 
+function populateMapFilter() {
+  els.mapDayFilter.innerHTML = [
+    '<option value="all">全部行程</option>',
+    ...state.days.map((day, index) => `<option value="${index}">${escapeHtml(day.date)}</option>`)
+  ].join("");
+  state.mapFilter = "all";
+  els.mapDayFilter.value = "all";
+}
+
+function ensureRouteMap() {
+  if (state.routeMap) return true;
+  if (typeof window.L === "undefined") {
+    els.routeMap.hidden = true;
+    els.mapEmpty.hidden = false;
+    els.mapEmpty.querySelector("strong").textContent = "地图组件暂时无法加载";
+    els.mapEmpty.querySelector("p").textContent = "时间轴和手机地图导航仍可正常使用，请稍后刷新重试。";
+    els.mapStatus.textContent = "Leaflet 资源加载失败。";
+    return false;
+  }
+
+  state.routeMap = window.L.map(els.routeMap, {
+    scrollWheelZoom: false,
+    zoomControl: true
+  });
+  const tiles = window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>'
+  });
+  let tileErrors = 0;
+  tiles.on("tileerror", () => {
+    tileErrors += 1;
+    if (tileErrors >= 3) els.mapStatus.textContent = "底图加载不完整；时间轴和外部地图导航不受影响。";
+  });
+  tiles.addTo(state.routeMap);
+  state.routeLayer = window.L.layerGroup().addTo(state.routeMap);
+  return true;
+}
+
+function routeDays() {
+  if (state.mapFilter === "all") return state.days;
+  const index = Number(state.mapFilter);
+  return Number.isInteger(index) && state.days[index] ? [state.days[index]] : state.days;
+}
+
+function renderRouteMap() {
+  const days = routeDays();
+  const points = days.flatMap((day) => day.items
+    .filter((item) => item.coordinates)
+    .map((item) => ({ day, item })));
+
+  els.routeMapPanel.hidden = false;
+  if (!points.length) {
+    els.routeMap.hidden = true;
+    els.mapEmpty.hidden = false;
+    els.mapEmpty.querySelector("strong").textContent = "这份计划还没有路线坐标";
+    els.mapEmpty.querySelector("p").textContent = "在行程元数据中加入“坐标：经度,纬度”即可显示路线。";
+    els.mapStatus.textContent = "";
+    return;
+  }
+
+  els.routeMap.hidden = false;
+  els.mapEmpty.hidden = true;
+  if (!ensureRouteMap()) return;
+  state.routeLayer.clearLayers();
+
+  const bounds = [];
+  let sequence = 0;
+  for (const day of days) {
+    const dayPoints = day.items.filter((item) => item.coordinates);
+    for (let index = 0; index < dayPoints.length; index += 1) {
+      const item = dayPoints[index];
+      const completed = Boolean(state.progress[item.id]);
+      const status = completed ? "completed" : "pending";
+      const latLng = [item.coordinates.latitude, item.coordinates.longitude];
+      sequence += 1;
+      bounds.push(latLng);
+
+      const marker = window.L.marker(latLng, {
+        icon: window.L.divIcon({
+          className: "route-marker-icon",
+          html: `<span class="route-marker ${status}" aria-hidden="true">${sequence}</span>`,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
+          popupAnchor: [0, -17]
+        }),
+        title: `${sequence}. ${item.place?.label || item.title}`
+      });
+      marker.bindPopup(`<div class="route-popup">
+        <strong>${sequence}. ${escapeHtml(item.place?.label || item.title)}</strong>
+        <span>${escapeHtml(day.date)} · ${escapeHtml(item.start)}${item.end ? `—${escapeHtml(item.end)}` : ""}</span>
+        <span>${escapeHtml(item.place?.address || item.title)}</span>
+        <span class="popup-status ${status}">${completed ? "已完成" : "待完成"}</span>
+      </div>`);
+      marker.addTo(state.routeLayer);
+
+      if (index > 0) {
+        const previous = dayPoints[index - 1];
+        const previousLatLng = [previous.coordinates.latitude, previous.coordinates.longitude];
+        window.L.polyline([previousLatLng, latLng], {
+          color: MAP_COLORS[status],
+          weight: completed ? 3 : 5,
+          opacity: completed ? 0.55 : 0.9,
+          dashArray: completed ? "7 7" : null,
+          lineCap: "round"
+        }).addTo(state.routeLayer);
+      }
+    }
+  }
+
+  const mapBounds = window.L.latLngBounds(bounds);
+  state.routeMap.fitBounds(mapBounds, { padding: [34, 34], maxZoom: 14 });
+  els.mapStatus.textContent = `显示 ${points.length} 个有坐标的行程地点；连线仅表示游览顺序。`;
+  window.setTimeout(() => state.routeMap.invalidateSize(), 0);
+}
+
 function updateProgress() {
   const items = state.days.flatMap((day) => day.items);
   const completed = items.filter((item) => state.progress[item.id]).length;
@@ -264,6 +399,7 @@ function render() {
   renderTabs();
   renderTimeline();
   updateProgress();
+  renderRouteMap();
 }
 
 function documentInfo(markdown, days, fileName) {
@@ -308,8 +444,10 @@ function loadItineraryText(markdown, sourceName) {
   els.error.hidden = true;
   els.upload.hidden = true;
   els.progressCard.hidden = false;
+  els.routeMapPanel.hidden = false;
   els.tabs.hidden = false;
   els.timelinePanel.hidden = false;
+  populateMapFilter();
   render();
   registerWebMcpTools();
 }
@@ -406,6 +544,10 @@ els.dropZone.addEventListener("keydown", (event) => {
   }
 });
 els.fileInput.addEventListener("change", () => loadItineraryFile(els.fileInput.files?.[0]));
+els.mapDayFilter.addEventListener("change", () => {
+  state.mapFilter = els.mapDayFilter.value;
+  renderRouteMap();
+});
 
 for (const eventName of ["dragenter", "dragover"]) {
   els.dropZone.addEventListener(eventName, (event) => {
