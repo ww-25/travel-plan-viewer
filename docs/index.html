@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#073b4c" />
     <meta
       name="description"
-      content="2026 国庆威海自驾行程时间表，支持进度勾选与手机地图导航。"
+      content="在浏览器中读取旅游计划 Markdown，并显示为可勾选的行程时间表。"
     />
-    <title>威海海岸行程簿</title>
+    <title>旅行行程簿</title>
     <link
       rel="icon"
       type="image/svg+xml"
@@ -21,14 +21,41 @@
       <div class="hero-photo" role="img" aria-label="威海悦海公园海岸与灯塔"></div>
       <div class="hero-shade"></div>
       <div class="hero-content shell">
-        <p class="eyebrow">2026 · 国庆 · 两人自驾</p>
-        <h1>威海海岸行程簿</h1>
-        <p class="trip-meta">10 月 3 日 15:00 — 10 月 5 日 11:00</p>
+        <p class="eyebrow">本地 Markdown · 可视化行程</p>
+        <h1 id="trip-title">旅行行程簿</h1>
+        <p class="trip-meta" id="trip-meta">正在检查默认行程…</p>
       </div>
     </header>
 
     <main class="shell app-shell">
-      <section class="progress-card" aria-labelledby="progress-title">
+      <section class="upload-card" id="upload-card" aria-labelledby="upload-title" hidden>
+        <div class="upload-copy">
+          <p class="section-kicker">导入行程</p>
+          <h2 id="upload-title">选择旅游计划 Markdown</h2>
+          <p>文件只在当前浏览器中读取和解析，不会上传到服务器。</p>
+        </div>
+        <div class="drop-zone" id="drop-zone" tabindex="0" role="button" aria-label="选择或拖入 Markdown 文件">
+          <input id="file-input" type="file" accept=".md,text/markdown,text/plain" hidden />
+          <span class="file-icon" aria-hidden="true">MD</span>
+          <div>
+            <strong>拖入 .md 文件</strong>
+            <span>或点击此处选择文件，最大 2 MB</span>
+          </div>
+        </div>
+        <div class="file-row">
+          <div>
+            <span class="file-label">当前文件</span>
+            <strong id="file-name">尚未选择</strong>
+          </div>
+          <button class="secondary-button" id="change-file" type="button">选择文件</button>
+        </div>
+        <div id="error-state" class="error-state" role="alert" hidden>
+          <strong>无法读取这个行程文件</strong>
+          <p id="error-message">请选择符合旅游计划 Markdown 标准的文件。</p>
+        </div>
+      </section>
+
+      <section class="progress-card" id="progress-card" aria-labelledby="progress-title" hidden>
         <div class="progress-copy">
           <p class="section-kicker" id="progress-title">旅行进度</p>
           <p class="progress-number"><span id="completed-count">0</span>/<span id="total-count">0</span></p>
@@ -43,30 +70,20 @@
         </div>
       </section>
 
-      <section class="notice" aria-label="行程提醒">
-        <span class="notice-icon">≈</span>
-        <div>
-          <strong>10 月 4 日有风雨</strong>
-          <span>环海路辅线禁车，按计划停车换乘；湿滑时缩短徒步。</span>
-        </div>
-      </section>
+      <nav class="day-tabs" id="day-tabs" aria-label="选择行程日期" hidden></nav>
 
-      <nav class="day-tabs" id="day-tabs" aria-label="选择行程日期"></nav>
-
-      <section class="timeline-panel" aria-live="polite">
+      <section class="timeline-panel" id="timeline-panel" aria-live="polite" hidden>
         <div class="day-heading">
           <div>
             <p class="section-kicker" id="active-date">行程</p>
             <h2 id="active-title">读取中</h2>
           </div>
-          <button class="text-button" id="reset-button" type="button">重置进度</button>
+          <div class="day-actions">
+            <button class="text-button" id="replace-file" type="button">更换文件</button>
+            <button class="text-button" id="reset-button" type="button">重置进度</button>
+          </div>
         </div>
         <div id="timeline" class="timeline"></div>
-        <div id="error-state" class="error-state" hidden>
-          <strong>暂时无法读取行程文件</strong>
-          <p>请通过网页服务器打开此应用，并确认 Markdown 文件与网页资源位于同一目录。</p>
-          <button type="button" id="retry-button">重新读取</button>
-        </div>
       </section>
     </main>
 
@@ -96,7 +113,7 @@
     </dialog>
 
     <footer class="shell footer">
-      <p>行程内容来自《威海国庆自驾计划_2026-10-03至10-05.md》，完成状态仅保存在当前设备。</p>
+      <p>行程文件在浏览器本地解析；完成状态仅保存在当前设备。</p>
       <a href="https://www.trip.com/moments/detail/weihai-169-138954467" target="_blank" rel="noreferrer">背景图片来源</a>
     </footer>
 

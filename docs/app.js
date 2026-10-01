@@ -1,5 +1,6 @@
-const MARKDOWN_FILE = "./威海国庆自驾计划_2026-10-03至10-05.md";
-const STORAGE_KEY = "weihai-trip-progress:v1";
+const STORAGE_PREFIX = "travel-plan-progress:v2:";
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_PLAN_URL = "./trip.md";
 
 const placeRules = [
   { test: /入住、处理停车/, name: "麗枫酒店（威海幸福门威高广场店）", address: "山东省威海市环翠区昆明路16号" },
@@ -19,10 +20,21 @@ const placeRules = [
 const state = {
   days: [],
   activeDay: 0,
-  progress: loadProgress()
+  progress: {},
+  storageKey: ""
 };
 
 const els = {
+  tripTitle: document.querySelector("#trip-title"),
+  tripMeta: document.querySelector("#trip-meta"),
+  upload: document.querySelector("#upload-card"),
+  dropZone: document.querySelector("#drop-zone"),
+  fileInput: document.querySelector("#file-input"),
+  fileName: document.querySelector("#file-name"),
+  changeFile: document.querySelector("#change-file"),
+  replaceFile: document.querySelector("#replace-file"),
+  progressCard: document.querySelector("#progress-card"),
+  timelinePanel: document.querySelector("#timeline-panel"),
   tabs: document.querySelector("#day-tabs"),
   timeline: document.querySelector("#timeline"),
   activeDate: document.querySelector("#active-date"),
@@ -34,7 +46,7 @@ const els = {
   ring: document.querySelector(".progress-ring"),
   reset: document.querySelector("#reset-button"),
   error: document.querySelector("#error-state"),
-  retry: document.querySelector("#retry-button"),
+  errorMessage: document.querySelector("#error-message"),
   dialog: document.querySelector("#map-dialog"),
   closeMap: document.querySelector("#close-map"),
   mapPlace: document.querySelector("#map-place"),
@@ -44,13 +56,14 @@ const els = {
   apple: document.querySelector("#apple-link")
 };
 
-function loadProgress() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); }
+function loadProgress(storageKey) {
+  if (!storageKey) return {};
+  try { return JSON.parse(localStorage.getItem(storageKey) || "{}"); }
   catch { return {}; }
 }
 
 function saveProgress() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.progress));
+  if (state.storageKey) localStorage.setItem(state.storageKey, JSON.stringify(state.progress));
 }
 
 function hash(input) {
@@ -85,6 +98,7 @@ function detailsToHtml(lines) {
 
   for (const raw of lines) {
     const line = raw.trim();
+    if (/^[-*]\s*(类型|地点|地址|导航关键词)：/.test(line)) continue;
     if (!line || line.startsWith("**步行路线：**") || line.startsWith("**滨海自驾路线：**") || line.startsWith("**建议动线：**")) {
       if (line) {
         flushList();
@@ -105,6 +119,15 @@ function detailsToHtml(lines) {
   return output.slice(0, 5).join("");
 }
 
+function itemMetadata(lines) {
+  const metadata = {};
+  for (const raw of lines) {
+    const match = raw.trim().match(/^[-*]\s*(类型|地点|地址|导航关键词|停车)：\s*(.+)$/);
+    if (match) metadata[match[1]] = match[2].trim();
+  }
+  return metadata;
+}
+
 function parseItinerary(markdown) {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const days = [];
@@ -113,15 +136,18 @@ function parseItinerary(markdown) {
 
   const closeItem = () => {
     if (!item || !day) return;
+    const metadata = itemMetadata(item.lines);
     item.details = detailsToHtml(item.lines);
     delete item.lines;
-    item.place = placeRules.find((rule) => rule.test.test(item.title)) || null;
+    item.place = metadata["地点"] && metadata["地址"] && metadata["导航关键词"]
+      ? { name: metadata["导航关键词"], address: metadata["地址"], label: metadata["地点"] }
+      : placeRules.find((rule) => rule.test.test(item.title)) || null;
     day.items.push(item);
     item = null;
   };
 
   for (const line of lines) {
-    const dayMatch = line.match(/^##\s+(10 月 \d+ 日)｜(.+)$/);
+    const dayMatch = line.match(/^##\s+(\d{1,2}\s+月\s+\d{1,2}\s+日)｜(.+)$/);
     const itemMatch = line.match(/^###\s+(\d{2}:\d{2})(?:—(\d{2}:\d{2}))?\s+(.+)$/);
 
     if (dayMatch) {
@@ -224,12 +250,12 @@ function updateProgress() {
 }
 
 function openMap(place) {
-  els.mapPlace.textContent = place.name;
+  els.mapPlace.textContent = place.label || place.name;
   els.mapAddress.textContent = place.address;
   const keyword = encodeURIComponent(place.name);
   const address = encodeURIComponent(place.address);
-  els.amap.href = `https://uri.amap.com/search?keyword=${keyword}&city=%E5%A8%81%E6%B5%B7&view=map&src=weihai-trip&callnative=1`;
-  els.baidu.href = `https://api.map.baidu.com/geocoder?address=${address}&output=html&src=weihai-trip`;
+  els.amap.href = `https://uri.amap.com/search?keyword=${keyword}&view=map&src=travel-plan&callnative=1`;
+  els.baidu.href = `https://api.map.baidu.com/geocoder?address=${address}&output=html&src=travel-plan`;
   els.apple.href = `https://maps.apple.com/?q=${keyword}&address=${address}`;
   els.dialog.showModal();
 }
@@ -240,22 +266,80 @@ function render() {
   updateProgress();
 }
 
-async function loadItinerary() {
+function documentInfo(markdown, days, fileName) {
+  const titleMatch = markdown.match(/^#\s+(.+)$/m);
+  const title = titleMatch?.[1]?.trim() || fileName.replace(/\.md$/i, "") || "旅行行程簿";
+  const firstDay = days[0];
+  const lastDay = days.at(-1);
+  const firstItem = firstDay?.items[0];
+  const lastItem = lastDay?.items.at(-1);
+  const range = firstDay && lastDay
+    ? `${firstDay.date}${firstItem ? ` ${firstItem.start}` : ""} — ${lastDay.date}${lastItem?.end ? ` ${lastItem.end}` : ""}`
+    : "已读取行程";
+  return { title, range };
+}
+
+function showFileError(message) {
+  els.upload.hidden = false;
+  els.errorMessage.textContent = message;
+  els.error.hidden = false;
+}
+
+function loadItineraryText(markdown, sourceName) {
+  const normalizedMarkdown = markdown.replace(/^\uFEFF/, "");
+  if (!normalizedMarkdown.trim()) throw new Error("文件内容为空。");
+  if (normalizedMarkdown.includes("\uFFFD")) throw new Error("文件可能不是 UTF-8 编码，请转换编码后重试。");
+
+  const days = parseItinerary(normalizedMarkdown);
+  const itemCount = days.reduce((sum, day) => sum + day.items.length, 0);
+  if (!days.length || !itemCount) {
+    throw new Error("没有找到可识别的日期和时间块。请使用“## M 月 D 日｜主题”与“### HH:MM—HH:MM 标题”。");
+  }
+
+  const info = documentInfo(normalizedMarkdown, days, sourceName);
+  state.days = days;
+  state.activeDay = 0;
+  state.storageKey = `${STORAGE_PREFIX}${hash(normalizedMarkdown)}`;
+  state.progress = loadProgress(state.storageKey);
+  els.fileName.textContent = sourceName;
+  els.tripTitle.textContent = info.title;
+  els.tripMeta.textContent = info.range;
+  document.title = `${info.title} · 旅行行程簿`;
   els.error.hidden = true;
-  els.timeline.hidden = false;
+  els.upload.hidden = true;
+  els.progressCard.hidden = false;
+  els.tabs.hidden = false;
+  els.timelinePanel.hidden = false;
+  render();
+  registerWebMcpTools();
+}
+
+async function loadItineraryFile(file) {
+  els.error.hidden = true;
   try {
-    const response = await fetch(encodeURI(MARKDOWN_FILE), { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const markdown = await response.text();
-    state.days = parseItinerary(markdown);
-    if (!state.days.length) throw new Error("No itinerary days found");
-    render();
-    registerWebMcpTools();
+    if (!file) return;
+    if (!/\.md$/i.test(file.name)) throw new Error("请选择扩展名为 .md 的 Markdown 文件。");
+    if (file.size > MAX_FILE_BYTES) throw new Error("文件超过 2 MB，请精简后重新选择。");
+    loadItineraryText(await file.text(), file.name);
   } catch (error) {
     console.error(error);
-    els.timeline.hidden = true;
-    els.error.hidden = false;
-    els.status.textContent = "读取失败，请检查行程文件。";
+    showFileError(error instanceof Error ? error.message : "读取失败，请检查文件。");
+  } finally {
+    els.fileInput.value = "";
+  }
+}
+
+async function loadDefaultItinerary() {
+  els.tripMeta.textContent = "正在检查默认行程…";
+  try {
+    const response = await fetch(DEFAULT_PLAN_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error(`默认行程不可用（HTTP ${response.status}）`);
+    loadItineraryText(await response.text(), "trip.md");
+  } catch (error) {
+    console.info("默认行程加载失败，切换为本地文件模式。", error);
+    els.tripMeta.textContent = "未找到可用的默认行程，请选择本地 Markdown 文件";
+    els.fileName.textContent = "未加载默认 trip.md";
+    showFileError(error instanceof Error ? `${error.message}，你可以改为上传本地文件。` : "无法加载默认行程，请上传本地文件。");
   }
 }
 
@@ -267,7 +351,7 @@ function registerWebMcpTools() {
   void Promise.resolve(context.registerTool({
     name: "get_trip_progress",
     title: "读取旅行进度",
-    description: "读取威海行程的所有项目及其完成状态。",
+    description: "读取当前导入行程的所有项目及其完成状态。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: false },
     execute() {
@@ -311,8 +395,33 @@ els.reset.addEventListener("click", () => {
     render();
   }
 });
-els.retry.addEventListener("click", loadItinerary);
+
+els.changeFile.addEventListener("click", () => els.fileInput.click());
+els.replaceFile.addEventListener("click", () => els.fileInput.click());
+els.dropZone.addEventListener("click", () => els.fileInput.click());
+els.dropZone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    els.fileInput.click();
+  }
+});
+els.fileInput.addEventListener("change", () => loadItineraryFile(els.fileInput.files?.[0]));
+
+for (const eventName of ["dragenter", "dragover"]) {
+  els.dropZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    els.dropZone.classList.add("drag-active");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  els.dropZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    els.dropZone.classList.remove("drag-active");
+  });
+}
+els.dropZone.addEventListener("drop", (event) => loadItineraryFile(event.dataTransfer?.files?.[0]));
+
 els.closeMap.addEventListener("click", () => els.dialog.close());
 els.dialog.addEventListener("click", (event) => { if (event.target === els.dialog) els.dialog.close(); });
 
-loadItinerary();
+loadDefaultItinerary();
